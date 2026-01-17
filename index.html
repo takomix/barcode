@@ -2,143 +2,342 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Debug Barcode Reader</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>High Precision Scanner</title>
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
     <style>
+        :root {
+            --scanner-border-color: rgba(255, 255, 255, 0.9);
+            --primary-color: #007aff;
+            --bg-glass: rgba(20, 20, 20, 0.95);
+        }
+
         body {
-            font-family: sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Roboto, Helvetica, Arial, sans-serif;
             background-color: #000;
             color: #fff;
             margin: 0;
+            padding: 0;
+            height: 100vh;
+            overflow: hidden;
             display: flex;
             flex-direction: column;
-            height: 100vh;
         }
-        #scanner-container {
-            flex: 1;
+
+        /* --- カメラエリア --- */
+        #scanner-wrapper {
             position: relative;
-            background: #222;
+            flex: 1;
+            width: 100%;
+            height: 100%;
+            background: #000;
             display: flex;
             justify-content: center;
             align-items: center;
             overflow: hidden;
         }
+
         #reader {
             width: 100%;
             height: 100%;
         }
-        /* エラーログ表示エリア */
-        #debug-log {
+        
+        #reader video {
+            object-fit: cover !important;
+            width: 100% !important;
+            height: 100% !important;
+        }
+
+        /* --- スキャンガイド (オーバーレイ) --- */
+        .scan-overlay {
             position: absolute;
-            top: 10px; left: 10px; right: 10px;
-            background: rgba(255, 0, 0, 0.8);
-            color: white;
-            padding: 10px;
-            font-size: 12px;
-            border-radius: 5px;
-            display: none;
+            top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 10;
+            pointer-events: none;
+            /* 周りを暗くして枠を目立たせる */
+            background: radial-gradient(rect, transparent 0%, transparent 60%, rgba(0,0,0,0.6) 80%);
+        }
+
+        /* 大きな枠線 */
+        .scan-frame {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 85vw;  /* 画面幅の85% */
+            max-width: 400px;
+            height: 25vh; /* 高さは控えめに */
+            min-height: 150px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 12px;
+            box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.5); /* 強制的に周りを暗く */
+            transition: all 0.2s ease;
+        }
+
+        /* 四隅の強調 */
+        .scan-frame::after, .scan-frame::before {
+            content: '';
+            position: absolute;
+            width: 30px; height: 30px;
+            border-color: var(--scanner-border-color);
+            border-style: solid;
+            transition: border-color 0.2s;
+        }
+        
+        .scan-frame::before {
+            top: -2px; left: -2px;
+            border-width: 4px 0 0 4px;
+            border-top-left-radius: 12px;
+        }
+        
+        .scan-frame::after {
+            bottom: -2px; right: -2px;
+            border-width: 0 4px 4px 0;
+            border-bottom-right-radius: 12px;
+        }
+
+        /* 別の四隅を作るための要素 */
+        .scan-frame-inner {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+        }
+        .scan-frame-inner::before {
+            content: ''; position: absolute; top: -2px; right: -2px;
+            width: 30px; height: 30px;
+            border-style: solid; border-width: 4px 4px 0 0;
+            border-color: var(--scanner-border-color);
+            border-top-right-radius: 12px;
+        }
+        .scan-frame-inner::after {
+            content: ''; position: absolute; bottom: -2px; left: -2px;
+            width: 30px; height: 30px;
+            border-style: solid; border-width: 0 0 4px 4px;
+            border-color: var(--scanner-border-color);
+            border-bottom-left-radius: 12px;
+        }
+
+        /* 読み取り成功時のスタイル */
+        .scan-frame.success, 
+        .scan-frame.success::before, .scan-frame.success::after,
+        .scan-frame.success .scan-frame-inner::before, 
+        .scan-frame.success .scan-frame-inner::after {
+            border-color: #4cd964; /* Green */
+        }
+        
+        .scan-frame.success {
+            box-shadow: 0 0 0 2000px rgba(0, 0, 0, 0.7);
+            background-color: rgba(76, 217, 100, 0.1);
+        }
+
+        /* --- スタート画面 --- */
+        #start-screen {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: #000;
             z-index: 100;
-            white-space: pre-wrap;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
         }
-        /* 起動ボタン */
-        #start-btn {
+        .tap-msg { margin-top: 20px; font-size: 1.2rem; color: #aaa; }
+        
+        /* --- 結果モーダル --- */
+        #result-modal {
             position: absolute;
+            bottom: 0; left: 0; width: 100%;
+            background: var(--bg-glass);
+            backdrop-filter: blur(10px);
+            border-top-left-radius: 20px;
+            border-top-right-radius: 20px;
+            padding: 24px 20px 40px;
+            box-sizing: border-box;
+            transform: translateY(110%);
+            transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
             z-index: 50;
-            padding: 15px 30px;
-            background: #4caf50;
-            color: white;
-            border: none;
-            border-radius: 25px;
-            font-size: 16px;
-            font-weight: bold;
-        }
-        /* 結果エリア */
-        #result-area {
-            height: 150px;
-            background: #fff;
-            color: #000;
-            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
             text-align: center;
+            border-top: 1px solid rgba(255,255,255,0.1);
         }
-        .result-text { font-size: 20px; font-weight: bold; margin: 10px 0; }
+        #result-modal.visible { transform: translateY(0); }
+
+        .modal-handle {
+            width: 40px; height: 4px; background: rgba(255,255,255,0.3);
+            border-radius: 2px; margin-bottom: 20px;
+        }
+        .result-format { font-size: 0.8rem; color: #888; margin-bottom: 5px; text-transform: uppercase; }
+        .result-text { font-size: 1.6rem; font-weight: bold; color: #fff; margin-bottom: 25px; word-break: break-all; font-family: monospace; }
+        .btn-group { display: flex; gap: 10px; width: 100%; }
+        .btn {
+            flex: 1; padding: 14px; border-radius: 10px; border: none;
+            font-size: 1rem; font-weight: bold; cursor: pointer;
+        }
+        .btn-secondary { background: rgba(255,255,255,0.2); color: #fff; }
+        .btn-primary { background: var(--primary-color); color: #fff; text-decoration: none; }
+        .btn-close {
+            margin-top: 15px; background: transparent; color: #aaa;
+            border: none; padding: 10px; cursor: pointer;
+        }
     </style>
 </head>
 <body>
 
-<div id="scanner-container">
-    <div id="debug-log"></div>
-    <div id="reader"></div>
-    <button id="start-btn" onclick="startScanner()">カメラを起動</button>
-</div>
+    <!-- スタート画面 -->
+    <div id="start-screen" onclick="startCamera()">
+        <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+        </svg>
+        <div class="tap-msg">Tap to Start</div>
+    </div>
 
-<div id="result-area">
-    <div>読み取り結果:</div>
-    <div id="result" class="result-text">---</div>
-    <div id="format" style="color: #666; font-size: 12px;"></div>
-</div>
-
-<script>
-    const debugLog = document.getElementById('debug-log');
-    
-    // エラーを表示する関数
-    function logError(msg) {
-        debugLog.style.display = 'block';
-        debugLog.innerText += "Error: " + msg + "\n";
-        console.error(msg);
-    }
-
-    // 環境チェック
-    function checkEnvironment() {
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-            logError("このブラウザはカメラAPIに対応していません。");
-            return false;
-        }
-        if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-            logError("【重要】HTTPS通信ではありません。\n現在のURL: " + location.href + "\nカメラはセキュリティ上、HTTPSまたはlocalhostでしか動作しません。");
-            return false;
-        }
-        return true;
-    }
-
-    function onScanSuccess(decodedText, decodedResult) {
-        document.getElementById('result').innerText = decodedText;
-        document.getElementById('format').innerText = decodedResult.result.format.formatName;
-        // 成功したら音を鳴らすなどの処理...
-    }
-
-    function startScanner() {
-        // まず環境チェック
-        if (!checkEnvironment()) return;
-
-        document.getElementById('start-btn').style.display = 'none';
+    <!-- カメラエリア -->
+    <div id="scanner-wrapper">
+        <div id="reader"></div>
         
-        const html5QrCode = new Html5Qrcode("reader");
-        const config = { fps: 10, qrbox: { width: 250, height: 150 } };
+        <!-- ガイド枠 -->
+        <div class="scan-overlay">
+            <div class="scan-frame" id="scan-frame">
+                <div class="scan-frame-inner"></div>
+            </div>
+        </div>
+    </div>
 
-        // カメラの取得を試みる
-        Html5Qrcode.getCameras().then(devices => {
-            if (devices && devices.length) {
-                // 背面カメラを探す
-                const cameraId = devices[devices.length - 1].id;
+    <!-- 結果表示 -->
+    <div id="result-modal">
+        <div class="modal-handle"></div>
+        <div class="result-format" id="res-format">FORMAT</div>
+        <div class="result-text" id="res-text">--</div>
+        
+        <div class="btn-group">
+            <button class="btn btn-secondary" onclick="copyText()">Copy</button>
+            <a href="#" target="_blank" class="btn btn-primary" id="btn-search">Search</a>
+        </div>
+        
+        <button class="btn-close" onclick="resetScanner()">Close & Scan Next</button>
+    </div>
+
+    <script>
+        const html5QrCode = new Html5Qrcode("reader");
+        let isScanning = false;
+        
+        // UI要素
+        const startScreen = document.getElementById('start-screen');
+        const scanFrame = document.getElementById('scan-frame');
+        const resultModal = document.getElementById('result-modal');
+        const resFormat = document.getElementById('res-format');
+        const resText = document.getElementById('res-text');
+        const btnSearch = document.getElementById('btn-search');
+
+        // 音声
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        function playSuccessSound() {
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.frequency.setValueAtTime(1200, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(600, audioCtx.currentTime + 0.15);
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.2);
+        }
+
+        // カメラ起動
+        function startCamera() {
+            // ローディング表示
+            document.querySelector('.tap-msg').innerText = "Starting Camera...";
+            
+            // 画面サイズ取得
+            const width = window.innerWidth;
+            const height = window.innerHeight;
+
+            // 読み取り範囲の設定（画面サイズに応じて調整）
+            // 画面幅の80%程度をスキャンエリアとして指定し、精度を上げる
+            const qrBoxSize = {
+                width: Math.min(600, Math.floor(width * 0.85)), 
+                height: Math.min(300, Math.floor(height * 0.4))
+            };
+
+            const config = {
+                fps: 15,
+                qrbox: qrBoxSize,
+                aspectRatio: height / width, // 画面のアスペクト比に合わせる
+                videoConstraints: {
+                    facingMode: "environment",
+                    width: { min: 640, ideal: 1280, max: 1920 }, // 可能ならHD画質を要求
+                    height: { min: 480, ideal: 720, max: 1080 },
+                    focusMode: "continuous" // オートフォーカス（対応ブラウザのみ）
+                }
+            };
+
+            html5QrCode.start(
+                { facingMode: "environment" },
+                config,
+                onScanSuccess
+            ).then(() => {
+                isScanning = true;
+                startScreen.style.display = 'none';
+            }).catch(err => {
+                console.error(err);
+                alert("カメラ起動エラー: " + err);
+                document.querySelector('.tap-msg').innerText = "Tap to Retry";
+            });
+        }
+
+        function onScanSuccess(decodedText, decodedResult) {
+            if (!isScanning) return;
+            isScanning = false;
+            
+            // フィードバック
+            playSuccessSound();
+            if (navigator.vibrate) navigator.vibrate(50);
+            
+            // カメラ停止（フリーズ）
+            html5QrCode.pause(true);
+            
+            // UI更新
+            scanFrame.classList.add('success');
+            
+            setTimeout(() => {
+                resText.innerText = decodedText;
+                resFormat.innerText = decodedResult.result.format.formatName;
                 
-                html5QrCode.start(
-                    { facingMode: "environment" }, // 背面カメラ指定
-                    config,
-                    onScanSuccess
-                ).catch(err => {
-                    logError("カメラ起動エラー: " + err);
-                    document.getElementById('start-btn').style.display = 'block';
-                });
-            } else {
-                logError("カメラデバイスが見つかりませんでした。");
-                document.getElementById('start-btn').style.display = 'block';
-            }
-        }).catch(err => {
-            logError("カメラ権限の取得に失敗しました。\n" + err);
-            document.getElementById('start-btn').style.display = 'block';
-        });
-    }
-</script>
+                if (decodedText.startsWith('http')) {
+                    btnSearch.href = decodedText;
+                    btnSearch.innerText = "Open Link";
+                } else {
+                    btnSearch.href = `https://www.google.com/search?q=${encodeURIComponent(decodedText)}`;
+                    btnSearch.innerText = "Search";
+                }
+                
+                resultModal.classList.add('visible');
+            }, 200);
+        }
+
+        function resetScanner() {
+            resultModal.classList.remove('visible');
+            scanFrame.classList.remove('success');
+            
+            setTimeout(() => {
+                html5QrCode.resume();
+                isScanning = true;
+            }, 300);
+        }
+
+        function copyText() {
+            navigator.clipboard.writeText(resText.innerText).then(() => {
+                const btn = document.querySelector('.btn-secondary');
+                const original = btn.innerText;
+                btn.innerText = "Copied!";
+                setTimeout(() => btn.innerText = original, 1000);
+            });
+        }
+    </script>
 </body>
 </html>
